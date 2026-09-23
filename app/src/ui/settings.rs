@@ -1,11 +1,13 @@
 //! The settings dialog: colour theme and the heads-up notification before blocks.
 
 use super::theme;
-use super::{dialog_frame, dim_background, App, JobDone};
-use crate::config::{self, Theme};
+use super::{dialog_frame, dim_background, App, ConfirmAction, JobDone, Modal};
+use crate::config::{self, Policies, Policy, Theme};
 use crate::notify;
 use crate::paths;
-use egui::{pos2, vec2, Align, Align2, FontId, Id, Layout, LayerId, Order, Rect, Rounding, Sense, Stroke, Ui};
+use crate::policy::{self, can_use, choice_label, unavailable_message};
+use chrono::Local;
+use egui::{pos2, vec2, Align, Align2, FontId, Id, Layout, LayerId, Order, Rect, RichText, Rounding, Sense, Stroke, Ui};
 
 pub(super) fn show(app: &mut App, ctx: &egui::Context) {
     if !app.settings_open {
@@ -13,6 +15,8 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
     }
     let Some(saved) = app.saved.clone() else { return };
     let mut prefs = saved.preferences;
+    let mut locks = saved.policies;
+    let locks_editable = can_use(saved.policies.change_locks, &saved, Local::now().naive_local());
     let mut close = false;
     let mut test = false;
 
@@ -20,7 +24,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
     let layer = Id::new("settings");
     egui::Area::new(layer).order(Order::Foreground).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
         dialog_frame().show(ui, |ui| {
-            ui.set_width(480.0);
+            ui.set_width(600.0);
             ui.horizontal(|ui| {
                 ui.label(theme::title("Settings", 20.0));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -30,33 +34,37 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
                 });
             });
             ui.add_space(6.0);
-
-            theme::section_title(ui, "Theme", None);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                for option in Theme::ALL {
-                    if theme_swatch(ui, option, prefs.theme == option).clicked() {
-                        prefs.theme = option;
-                    }
-                }
-            });
-            ui.add_space(12.0);
-
-            theme::section_title(ui, "Heads-up before blocking", Some("A Windows notification shortly before a block starts, while protection is on."));
-            ui.horizontal(|ui| {
-                theme::toggle(ui, &mut prefs.notify_before_block);
-                ui.label("Notify me before a block starts");
-            });
-            ui.add_enabled_ui(prefs.notify_before_block, |ui| {
+            let height = (ctx.screen_rect().height() - 200.0).max(200.0);
+            egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+                theme::section_title(ui, "Theme", None);
                 ui.horizontal(|ui| {
-                    ui.label(theme::muted("How early"));
-                    theme::segmented(ui, &mut prefs.notify_minutes, &[(5, "5 min"), (10, "10 min"), (15, "15 min")]);
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    for option in Theme::ALL {
+                        if theme_swatch(ui, option, prefs.theme == option).clicked() {
+                            prefs.theme = option;
+                        }
+                    }
                 });
+                ui.add_space(12.0);
+
+                theme::section_title(ui, "Heads-up before blocking", Some("A Windows notification shortly before a block starts, while protection is on."));
+                ui.horizontal(|ui| {
+                    theme::toggle(ui, &mut prefs.notify_before_block);
+                    ui.label("Notify me before a block starts");
+                });
+                ui.add_enabled_ui(prefs.notify_before_block, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(theme::muted("How early"));
+                        theme::segmented(ui, &mut prefs.notify_minutes, &[(5, "5 min"), (10, "10 min"), (15, "15 min")]);
+                    });
+                });
+                ui.add_space(2.0);
+                if theme::quiet_button(ui, "Send a test notification").clicked() {
+                    test = true;
+                }
+                ui.add_space(12.0);
+                lock_choices(ui, &mut locks, locks_editable, saved.policies.change_locks);
             });
-            ui.add_space(2.0);
-            if theme::quiet_button(ui, "Send a test notification").clicked() {
-                test = true;
-            }
         });
     });
     ctx.move_to_top(LayerId::new(Order::Foreground, layer));
@@ -78,11 +86,86 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
             Err(message) => app.error("Could not save settings", message),
         }
     }
+    if locks != saved.policies {
+        let newly_never: Vec<&str> = {
+            let (mut old, mut new) = (saved.policies, locks);
+            policy::rows(&mut old)
+                .into_iter()
+                .zip(policy::rows(&mut new))
+                .filter(|((_, _, before), (_, _, after))| **after == Policy::Never && **before != Policy::Never)
+                .map(|((label, _, _), _)| label)
+                .collect()
+        };
+        if newly_never.is_empty() {
+            save_locks(app, locks);
+        } else {
+            app.modal = Some(Modal::Confirm {
+                title: "Lock this for good?".into(),
+                message: format!(
+                    "You chose ‘No — never’ for:
+
+• {}
+
+This cannot be undone from the app, even by reinstalling it. Continue?",
+                    newly_never.join("
+• ")
+                ),
+                confirm: "Lock it".into(),
+                danger: true,
+                action: ConfirmAction::SetLocks(locks),
+            });
+        }
+    }
     if test {
         app.start_job("Sending a test notification…", || notify::send_test().map(|_| JobDone::TestNotification));
     }
     if close {
         app.settings_open = false;
+    }
+}
+
+/// The lock choices made during setup: editable only when "Change these lock choices" allows it.
+fn lock_choices(ui: &mut Ui, locks: &mut Policies, editable: bool, change_locks: Policy) {
+    ui.horizontal(|ui| {
+        theme::section_title(ui, "Lock choices", Some("Chosen during setup. They decide which controls stay available."));
+        if !editable {
+            theme::badge(ui, "LOCKED", theme::amber());
+        }
+    });
+    if !editable {
+        ui.label(RichText::new(unavailable_message(change_locks, "These cannot be changed")).color(theme::amber()).size(12.5));
+    }
+    ui.add_space(4.0);
+    let options = policy::options();
+    egui::Grid::new("settings-locks").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        for (label, _, value) in policy::rows(locks) {
+            ui.label(RichText::new(label).font(FontId::new(14.0, theme::semibold())));
+            if editable {
+                theme::segmented(ui, value, &options);
+            } else {
+                ui.label(theme::muted(choice_label(*value)));
+            }
+            ui.end_row();
+        }
+    });
+}
+
+/// Saves new lock choices, keeping everything else as saved.
+pub(super) fn save_locks(app: &mut App, locks: Policies) {
+    let Some(saved) = app.saved.clone() else { return };
+    if !can_use(saved.policies.change_locks, &saved, Local::now().naive_local()) {
+        app.error("Could not change lock choices", unavailable_message(saved.policies.change_locks, "Lock choices cannot be changed"));
+        return;
+    }
+    let mut next = saved;
+    next.policies = locks;
+    match config::save(&next, &paths::config_path()) {
+        Ok(()) => {
+            app.draft.policies = locks;
+            app.saved = Some(next);
+            app.toast("Lock choices saved.");
+        }
+        Err(message) => app.error("Could not save lock choices", message),
     }
 }
 

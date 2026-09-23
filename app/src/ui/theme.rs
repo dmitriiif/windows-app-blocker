@@ -294,17 +294,10 @@ pub fn section_title(ui: &mut Ui, text: &str, subtitle: Option<&str>) {
     ui.add_space(4.0);
 }
 
-/// A filled call-to-action button.
-pub fn filled_button(ui: &mut Ui, text: &str, fill: Color32, size: Vec2) -> Response {
+/// A filled call-to-action button in the theme's accent colour.
+pub fn filled_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
     let enabled = ui.is_enabled();
-    let fill = if enabled { fill } else { raised() };
-    let color = if !enabled {
-        faint()
-    } else if fill == accent() {
-        on_accent()
-    } else {
-        Color32::WHITE
-    };
+    let (fill, color) = if enabled { (accent(), on_accent()) } else { (raised(), faint()) };
     ui.add(
         egui::Button::new(RichText::new(text).font(FontId::new(15.0, semibold())).color(color))
             .fill(fill)

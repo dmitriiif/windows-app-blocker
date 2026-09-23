@@ -4,6 +4,7 @@
 //! monitor (`--monitor`), which Task Scheduler starts as SYSTEM.
 
 pub mod config;
+pub mod detect;
 pub mod install;
 pub mod logger;
 pub mod monitor;

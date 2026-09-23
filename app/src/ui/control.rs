@@ -6,7 +6,7 @@ use super::{App, ConfirmAction, JobDone, Modal};
 use crate::config::{self, Config};
 use crate::install;
 use crate::paths::{self, APP_NAME};
-use crate::policy::{can_use, display, unavailable_message};
+use crate::policy::{can_use, unavailable_message};
 use crate::schedule::{is_blocked, next_change};
 use crate::task;
 use chrono::{Local, NaiveDateTime};
@@ -36,7 +36,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
                 if app.update_available {
                     ui.add_space(6.0);
                     banner(ui, theme::accent(), "This copy of the app is different from the installed one.", |ui| {
-                        if theme::filled_button(ui, "Update installed app", theme::accent(), vec2(0.0, 30.0)).clicked() {
+                        if theme::filled_button(ui, "Update installed app", vec2(0.0, 30.0)).clicked() {
                             let config = saved.clone();
                             app.start_job("Updating the installed app…", move || install::install(&config).map(|_| JobDone::Updated));
                         }
@@ -184,7 +184,7 @@ fn protection_pill(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTim
                 }
                 State::Missing => {
                     let clicked = ui
-                        .allocate_ui_with_layout(vec2(90.0, row_height), centered, |ui| theme::filled_button(ui, "Repair", theme::amber(), vec2(90.0, 30.0)).clicked())
+                        .allocate_ui_with_layout(vec2(90.0, row_height), centered, |ui| theme::filled_button(ui, "Repair", vec2(90.0, 30.0)).clicked())
                         .inner;
                     if clicked {
                         let config = saved.clone();
@@ -242,9 +242,14 @@ pub(super) fn apps_editor(ui: &mut Ui, app: &mut App, can_remove_protected: bool
                     ui.label(RichText::new(&name).font(egui::FontId::new(14.5, theme::semibold())));
                     ui.add(egui::Label::new(theme::muted(path.as_str()).size(12.0)).truncate());
                 });
-                if !Path::new(path).exists() {
+                let versioned = path.contains('*');
+                if paths::expand(path).is_empty() {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         theme::badge(ui, "NOT FOUND", theme::amber()).on_hover_text("This file does not exist right now. It will still be blocked if it appears.");
+                    });
+                } else if versioned {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        theme::badge(ui, "ALL VERSIONS", theme::accent()).on_hover_text("Every version of this app is blocked, so updates do not undo the block.");
                     });
                 }
             });
@@ -264,8 +269,14 @@ pub(super) fn apps_editor(ui: &mut Ui, app: &mut App, can_remove_protected: bool
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if theme::filled_button(ui, "+  Add .exe…", theme::accent(), vec2(0.0, 34.0)).clicked() {
+        if theme::filled_button(ui, "+  Add .exe…", vec2(0.0, 34.0)).clicked() {
             add_executables(app);
+        }
+        if ui.add(egui::Button::new("Find common apps…").fill(theme::raised()).rounding(Rounding::same(8.0)).min_size(vec2(0.0, 34.0)))
+            .on_hover_text("Look for installed browsers, game stores and chat apps such as Chrome, Steam and Discord.")
+            .clicked()
+        {
+            super::finder::open(app);
         }
         let selection: Vec<String> = app.selected_apps.clone();
         let blocked_by_policy = !can_remove_protected && selection.iter().any(|s| protected.iter().any(|p| paths::same_path(p, s)));
@@ -370,8 +381,7 @@ pub(super) fn uninstall(app: &mut App) {
 fn footer(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime) {
     let dirty = app.is_dirty();
     ui.horizontal(|ui| {
-        let fill = if dirty { theme::accent() } else { theme::raised() };
-        let save = ui.add_enabled_ui(dirty, |ui| theme::filled_button(ui, "Save changes", fill, vec2(150.0, 38.0))).inner;
+        let save = ui.add_enabled_ui(dirty, |ui| theme::filled_button(ui, "Save changes", vec2(150.0, 38.0))).inner;
         if save.clicked() {
             if let Err(message) = save_changes(app, true) {
                 app.error("Could not save changes", message);
@@ -398,26 +408,13 @@ fn footer(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime) {
                 app.modal = Some(Modal::Confirm {
                     title: format!("Uninstall {APP_NAME}?"),
                     message: format!(
-                        "This will turn protection off and remove {APP_NAME} from this computer.\n\nYour apps, schedule and lock choices are kept in {} and will be restored if you install it again.",
-                        paths::data_dir().display()
+                        "This will turn protection off and remove {APP_NAME} from this computer.\n\nYour apps, schedule and lock choices are kept and will be restored if you install it again.",
                     ),
                     confirm: "Uninstall".into(),
                     danger: true,
                     action: ConfirmAction::Uninstall,
                 });
             }
-            ui.add_space(8.0);
-            let p = &saved.policies;
-            ui.label(
-                theme::muted(format!(
-                    "Setup choices — change hours: {}; turn off: {}; remove apps: {}; uninstall: {}.",
-                    display(p.change_times),
-                    display(p.turn_off),
-                    display(p.remove_executables),
-                    display(p.uninstall)
-                ))
-                .size(12.0),
-            );
         });
     });
 }

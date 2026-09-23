@@ -6,7 +6,7 @@ use super::timeline::{self, Schedule};
 use super::{App, ConfirmAction, JobDone, Modal};
 use crate::config::{is_valid_sid, Policy, ScheduleMode};
 use crate::install;
-use crate::policy::{can_use, choice_label, display, unavailable_message};
+use crate::policy::{self, can_use, choice_label, display, unavailable_message};
 use crate::win;
 use chrono::Local;
 use egui::{vec2, Align, Color32, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, Ui};
@@ -160,18 +160,8 @@ fn policies_step(app: &mut App, ui: &mut Ui) {
             });
             ui.add_space(4.0);
         }
-        let options = [
-            (Policy::Always, choice_label(Policy::Always)),
-            (Policy::Never, choice_label(Policy::Never)),
-            (Policy::AllowedHoursOnly, choice_label(Policy::AllowedHoursOnly)),
-        ];
-        let policies = &mut app.draft.policies;
-        let rows: [(&str, &str, &mut Policy); 4] = [
-            ("Change blocking hours", "Edit the timeline after setup.", &mut policies.change_times),
-            ("Turn protection off", "Turning protection on is always allowed.", &mut policies.turn_off),
-            ("Uninstall this app", "Your settings are kept either way.", &mut policies.uninstall),
-            ("Remove apps from the block list", "Adding apps is always allowed.", &mut policies.remove_executables),
-        ];
+        let options = policy::options();
+        let rows = policy::rows(&mut app.draft.policies);
         egui::Grid::new("policies").num_columns(2).spacing(vec2(24.0, 14.0)).show(ui, |ui| {
             for (label, hint, value) in rows {
                 ui.vertical(|ui| {
@@ -237,6 +227,7 @@ fn finish_step(app: &mut App, ui: &mut Ui) {
                 ("Turn protection off", choice_label(p.turn_off).to_owned()),
                 ("Uninstall", choice_label(p.uninstall).to_owned()),
                 ("Remove apps", choice_label(p.remove_executables).to_owned()),
+                ("Change lock choices", choice_label(p.change_locks).to_owned()),
             ] {
                 ui.label(theme::muted(label));
                 ui.label(value);
@@ -266,7 +257,7 @@ fn footer(app: &mut App, ui: &mut Ui) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if step + 1 < STEPS.len() {
-                if theme::filled_button(ui, "Next", theme::accent(), vec2(130.0, 40.0)).clicked() {
+                if theme::filled_button(ui, "Next", vec2(130.0, 40.0)).clicked() {
                     match validate_step(app, step) {
                         Ok(()) => app.setup.step += 1,
                         Err(message) => app.error("Please check this step", message),
@@ -278,7 +269,7 @@ fn footer(app: &mut App, ui: &mut Ui) {
                         app.setup.step += 1;
                     }
                 }
-            } else if theme::filled_button(ui, "Install and finish setup", theme::green(), vec2(240.0, 44.0)).clicked() {
+            } else if theme::filled_button(ui, "Install and finish setup", vec2(240.0, 44.0)).clicked() {
                 request_install(app);
             }
         });
@@ -299,6 +290,7 @@ fn request_install(app: &mut App) {
         (p.turn_off, "turn protection off"),
         (p.uninstall, "uninstall from this app"),
         (p.remove_executables, "remove apps from the block list"),
+        (p.change_locks, "change these lock choices later"),
     ]
     .into_iter()
     .filter(|(policy, _)| *policy == Policy::Never)

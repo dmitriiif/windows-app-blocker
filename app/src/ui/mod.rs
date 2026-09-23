@@ -1,6 +1,7 @@
 //! The control panel and setup wizard.
 
 mod control;
+mod finder;
 mod settings;
 mod setup;
 pub mod theme;
@@ -18,11 +19,14 @@ use std::time::{Duration, Instant};
 use timeline::TimelineState;
 
 pub fn run() -> Result<(), String> {
+    // As large as the content needs, within the screen space above the taskbar.
+    let (min, wanted) = (vec2(760.0, 560.0), vec2(1120.0, 900.0));
+    let size = win::work_area().map_or(vec2(1000.0, 720.0), |(w, h)| wanted.min(vec2(w - 60.0, h - 50.0)).max(min));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
-            .with_inner_size([1000.0, 720.0])
-            .with_min_inner_size([760.0, 560.0])
+            .with_inner_size(size)
+            .with_min_inner_size(min)
             .with_decorations(false)
             .with_icon(theme::window_icon()),
         centered: true,
@@ -51,6 +55,7 @@ enum ConfirmAction {
     Install,
     Uninstall,
     DiscardAndClose,
+    SetLocks(config::Policies),
 }
 
 enum Modal {
@@ -121,6 +126,7 @@ pub struct App {
     last_reload: Instant,
     allow_close: bool,
     settings_open: bool,
+    finder: Option<finder::Finder>,
     /// This copy of the program differs from the installed one.
     update_available: bool,
     /// Setup choices last written to disk, and when the draft last changed since then.
@@ -158,6 +164,7 @@ impl App {
             last_reload: Instant::now(),
             allow_close: false,
             settings_open: false,
+            finder: None,
             update_available: false,
             setup_persisted: None,
             setup_changed_at: None,
@@ -167,7 +174,8 @@ impl App {
             Some(config) if config.setup_completed && install::is_installed() => app.open_control(config),
             Some(config) => {
                 let completed = config.setup_completed;
-                app.setup.locked_policies = completed;
+                let now = chrono::Local::now().naive_local();
+                app.setup.locked_policies = completed && !crate::policy::can_use(config.policies.change_locks, &config, now);
                 app.setup.previous = completed.then(|| config.clone());
                 app.setup.notice = Some(if legacy_task {
                     "Upgrading from the previous version. Your apps, schedule and lock choices have been carried over.".into()
@@ -293,8 +301,7 @@ impl App {
                 self.modal = Some(Modal::Message {
                     title: "Uninstall started".into(),
                     message: format!(
-                        "{APP_NAME} has been turned off and will finish removing itself when this window closes.\n\nYour settings stay in {} for next time.",
-                        paths::data_dir().display()
+                        "{APP_NAME} has been turned off and will finish removing itself when this window closes.\n\nYour settings are kept for next time.",
                     ),
                     error: false,
                     close_app: true,
@@ -349,12 +356,12 @@ impl App {
                 ui.add_space(12.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match modal {
                     Modal::Message { .. } => {
-                        if theme::filled_button(ui, "OK", theme::accent(), vec2(96.0, 36.0)).clicked() {
+                        if theme::filled_button(ui, "OK", vec2(96.0, 36.0)).clicked() {
                             dismissed = true;
                         }
                     }
-                    Modal::Confirm { confirm, danger, .. } => {
-                        if theme::filled_button(ui, confirm, if *danger { theme::red() } else { theme::accent() }, vec2(120.0, 36.0)).clicked() {
+                    Modal::Confirm { confirm, .. } => {
+                        if theme::filled_button(ui, confirm, vec2(120.0, 36.0)).clicked() {
                             confirmed = Some(());
                         }
                         if theme::quiet_button(ui, "Cancel").clicked() {
@@ -384,6 +391,7 @@ impl App {
                         self.allow_close = true;
                         ctx.send_viewport_cmd(ViewportCommand::Close);
                     }
+                    ConfirmAction::SetLocks(policies) => settings::save_locks(self, policies),
                 }
             }
         }
@@ -469,7 +477,7 @@ impl eframe::App for App {
             self.reload_saved();
         }
 
-        let interactive = self.modal.is_none() && self.job.is_none() && !self.settings_open;
+        let interactive = self.modal.is_none() && self.job.is_none() && !self.settings_open && self.finder.is_none();
         window_bar(ctx);
         match self.screen {
             Screen::Setup => setup::show(self, ctx, interactive),
@@ -478,6 +486,7 @@ impl eframe::App for App {
                 settings::show(self, ctx);
             }
         }
+        finder::show(self, ctx);
         self.show_modal(ctx);
         self.show_overlays(ctx);
         self.persist_setup_progress(false);
@@ -538,14 +547,12 @@ enum WindowButton {
 
 fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(46.0, WINDOW_BAR_HEIGHT), Sense::click());
-    let close = kind == WindowButton::Close;
     let hovered = response.hovered();
     if hovered {
-        let fill = if close { Color32::from_rgb(0xe8, 0x11, 0x23) } else { theme::raised() };
-        let fill = if response.is_pointer_button_down_on() && !close { theme::pressed() } else { fill };
+        let fill = if response.is_pointer_button_down_on() { theme::accent_hover() } else { theme::accent() };
         ui.painter().rect_filled(rect, 0.0, fill);
     }
-    let color = if close && hovered { Color32::WHITE } else if hovered { theme::text() } else { theme::muted_color() };
+    let color = if hovered { theme::on_accent() } else { theme::muted_color() };
     let stroke = Stroke::new(1.0_f32, color);
     let c = rect.center();
     let painter = ui.painter();

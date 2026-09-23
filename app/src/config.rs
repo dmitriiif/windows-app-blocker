@@ -205,6 +205,14 @@ pub struct Policies {
     pub turn_off: Policy,
     pub uninstall: Policy,
     pub remove_executables: Policy,
+    /// Whether these choices can be edited later from Settings. Configurations written before
+    /// this option existed get `Never`, like new installs.
+    #[serde(default = "never")]
+    pub change_locks: Policy,
+}
+
+fn never() -> Policy {
+    Policy::Never
 }
 
 impl Default for Policies {
@@ -214,6 +222,7 @@ impl Default for Policies {
             turn_off: Policy::Always,
             uninstall: Policy::Always,
             remove_executables: Policy::Always,
+            change_locks: Policy::Never,
         }
     }
 }
@@ -343,6 +352,11 @@ pub fn validate_executable(path: &str) -> Result<(), String> {
     let is_exe = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"));
     if !p.is_absolute() || !is_exe {
         return Err(format!("Invalid executable path '{path}'. Choose an absolute .exe path."));
+    }
+    // `*` is allowed in folder names only (see `paths::is_configured`); the file name must be exact.
+    let name = p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    if path.contains('?') || name.contains('*') {
+        return Err(format!("Invalid executable path '{path}'. Only folder names may contain '*'."));
     }
     Ok(())
 }
@@ -486,6 +500,7 @@ fn migrate_v2(v: &Value) -> Result<Config, String> {
             turn_off: policy("TurnOffProtectionPolicy")?,
             uninstall: policy("UninstallPolicy")?,
             remove_executables: policy("RemoveExecutablesPolicy")?,
+            change_locks: Policy::Never,
         },
         executables,
         target_user_sid: text("TargetUserSid").unwrap_or_default(),
@@ -564,6 +579,8 @@ mod tests {
         assert!(from_json_str(&legacy(json!({ "TargetUserSid": "not-a-sid" }))).is_err(), "bad SID");
         assert!(from_json_str(&legacy(json!({ "Executables": ["relative-program.exe"] }))).is_err(), "relative exe");
         assert!(from_json_str(&legacy(json!({ "Executables": ["C:\\Tools\\notes.txt"] }))).is_err(), "not an exe");
+        assert!(from_json_str(&legacy(json!({ "Executables": ["C:\\Tools\\*.exe"] }))).is_err(), "wildcard file name");
+        assert!(from_json_str(&legacy(json!({ "Executables": ["C:\\Tools\\app-*\\Tool.exe"] }))).is_ok(), "wildcard folder");
         assert!(from_json_str(&legacy(json!({ "ChangeTimesPolicy": "Sometimes" }))).is_err(), "bad policy");
         assert!(from_json_str(&legacy(json!({ "CheckIntervalSeconds": 0 }))).is_err(), "bad interval");
         assert!(from_json_str(&legacy(json!({ "BlockStart": "25:00" }))).is_err(), "bad time");
@@ -579,6 +596,16 @@ mod tests {
 
         c.days.monday.blocks.push(Block::new(630, 700).unwrap());
         assert!(from_json_str(&serde_json::to_string(&c).unwrap()).is_err());
+    }
+
+    #[test]
+    fn lock_choices_are_locked_by_default() {
+        let mut c = Config { target_user_sid: SID.into(), ..Config::default() };
+        assert_eq!(c.policies.change_locks, Policy::Never);
+        c.policies.change_locks = Policy::Always;
+        let mut value = serde_json::to_value(&c).unwrap();
+        value["policies"].as_object_mut().unwrap().remove("change_locks");
+        assert_eq!(from_json_str(&value.to_string()).unwrap().policies.change_locks, Policy::Never, "older v3 file");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Setup-time choices that decide which controls stay available later.
 
-use crate::config::{Config, Policy};
+use crate::config::{Config, Policies, Policy};
 use crate::schedule::is_blocked;
 use chrono::NaiveDateTime;
 
@@ -26,6 +26,22 @@ pub fn choice_label(policy: Policy) -> &'static str {
         Policy::Never => "No — never",
         Policy::AllowedHoursOnly => "Only during allowed hours",
     }
+}
+
+/// The choices offered for each lock, in display order.
+pub fn options() -> [(Policy, &'static str); 3] {
+    [Policy::Always, Policy::Never, Policy::AllowedHoursOnly].map(|p| (p, choice_label(p)))
+}
+
+/// Each lock choice with its label and a hint, in display order.
+pub fn rows(p: &mut Policies) -> [(&'static str, &'static str, &mut Policy); 5] {
+    [
+        ("Change blocking hours", "Edit the timeline after setup.", &mut p.change_times),
+        ("Turn protection off", "Turning protection on is always allowed.", &mut p.turn_off),
+        ("Uninstall this app", "Your settings are kept either way.", &mut p.uninstall),
+        ("Remove apps from the block list", "Adding apps is always allowed.", &mut p.remove_executables),
+        ("Change these lock choices", "Edit them later from Settings.", &mut p.change_locks),
+    ]
 }
 
 pub fn unavailable_message(policy: Policy, subject: &str) -> String {

@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, HANDLE, HLOCAL};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, HANDLE, HLOCAL, RECT};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
 use windows::Win32::System::RemoteDesktop::{
     WTSActive, WTSEnumerateSessionsW, WTSFreeMemory, WTSQueryUserToken, WTSSendMessageW, WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
 };
@@ -20,7 +21,10 @@ use windows::Win32::System::Threading::{
     TerminateProcess, CREATE_NO_WINDOW as CREATE_NO_WINDOW_FLAG, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, STARTF_USESHOWWINDOW, STARTUPINFOW,
 };
-use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MESSAGEBOX_RESULT, SW_HIDE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MESSAGEBOX_RESULT, SPI_GETWORKAREA, SW_HIDE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+};
 use windows::Win32::UI::Shell::{FOLDERID_CommonPrograms, FOLDERID_Desktop, IShellLinkW, SHGetKnownFolderPath, ShellLink, KF_FLAG_DEFAULT};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -261,6 +265,33 @@ pub fn message_box_for_user(sid: &str, title: &str, message: &str, timeout_secon
     Ok(())
 }
 
+/// Reads a text value from `HKEY_LOCAL_MACHINE` (`machine`) or `HKEY_CURRENT_USER`. `None` for
+/// `value` reads the key's default value. `REG_EXPAND_SZ` values come back expanded.
+pub fn registry_string(machine: bool, subkey: &str, value: Option<&str>) -> Option<String> {
+    let root = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let subkey = HSTRING::from(subkey);
+    let value = value.map(HSTRING::from);
+    let value_ptr = value.as_ref().map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr()));
+    unsafe {
+        let mut size = 0u32;
+        RegGetValueW(root, &subkey, value_ptr, RRF_RT_REG_SZ, None, None, Some(&mut size)).ok().ok()?;
+        let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+        RegGetValueW(root, &subkey, value_ptr, RRF_RT_REG_SZ, None, Some(buffer.as_mut_ptr() as *mut c_void), Some(&mut size)).ok().ok()?;
+        let len = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..len]))
+    }
+}
+
+/// Width and height of the primary screen minus the taskbar. Before the window opens the process
+/// is not DPI aware, so Windows reports this in scaled units, which match egui points.
+pub fn work_area() -> Option<(f32, f32)> {
+    let mut rect = RECT::default();
+    unsafe {
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, Some(&mut rect as *mut RECT as *mut c_void), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).ok()?;
+    }
+    Some(((rect.right - rect.left) as f32, (rect.bottom - rect.top) as f32))
+}
+
 fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
     unsafe {
         let raw = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
@@ -319,6 +350,13 @@ mod tests {
         assert!(single_instance(&name).is_none());
         drop(first);
         assert!(single_instance(&name).is_some());
+    }
+
+    #[test]
+    fn reads_the_registry() {
+        let root = registry_string(true, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", Some("SystemRoot"));
+        assert!(root.is_some_and(|r| Path::new(&r).is_dir()));
+        assert!(registry_string(true, r"SOFTWARE\NoSuchKeyForAppBlocker", None).is_none());
     }
 
     #[test]
