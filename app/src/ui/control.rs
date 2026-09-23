@@ -18,7 +18,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
     let Some(saved) = app.saved.clone() else { return };
 
     egui::TopBottomPanel::top("control-header")
-        .frame(Frame::none().fill(theme::bg()).inner_margin(Margin { left: 28.0, right: 28.0, top: 0.0, bottom: 8.0 }))
+        .frame(Frame::none().fill(theme::bg()).inner_margin(Margin { left: 28.0, right: 28.0, top: 6.0, bottom: 8.0 }))
         .show_separator_line(false)
         .show(ctx, |ui| {
             super::drag_window(ui, ui.max_rect());
