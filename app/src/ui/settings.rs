@@ -5,8 +5,7 @@ use super::{dialog_frame, dim_background, App, ConfirmAction, JobDone, Modal};
 use crate::config::{self, Policies, Policy, Theme};
 use crate::notify;
 use crate::paths;
-use crate::policy::{self, can_use, choice_label, unavailable_message};
-use chrono::Local;
+use crate::policy::{self, can_use_now, choice_label, unavailable_message};
 use egui::{pos2, vec2, Align, Align2, FontId, Id, Layout, LayerId, Order, Rect, RichText, Rounding, Sense, Stroke, Ui};
 
 pub(super) fn show(app: &mut App, ctx: &egui::Context) {
@@ -16,7 +15,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
     let Some(saved) = app.saved.clone() else { return };
     let mut prefs = saved.preferences;
     let mut locks = saved.policies;
-    let locks_editable = can_use(saved.policies.change_locks, &saved, Local::now().naive_local());
+    let locks_editable = can_use_now(saved.policies.change_locks, &saved);
     let mut close = false;
     let mut test = false;
 
@@ -153,7 +152,7 @@ fn lock_choices(ui: &mut Ui, locks: &mut Policies, editable: bool, change_locks:
 /// Saves new lock choices, keeping everything else as saved.
 pub(super) fn save_locks(app: &mut App, locks: Policies) {
     let Some(saved) = app.saved.clone() else { return };
-    if !can_use(saved.policies.change_locks, &saved, Local::now().naive_local()) {
+    if !can_use_now(saved.policies.change_locks, &saved) {
         app.error("Could not change lock choices", unavailable_message(saved.policies.change_locks, "Lock choices cannot be changed"));
         return;
     }

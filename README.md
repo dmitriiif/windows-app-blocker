@@ -5,18 +5,16 @@ Closes the Windows apps you choose during the hours you choose. No install of an
 ## Getting started
 
 1. Download **Windows App Blocker.exe** and double-click it.
-2. Approve the administrator prompt.
+2. Follow the Windows prompts.
 3. Go through setup: lock choices, apps, schedule, shortcuts. Your progress is saved as you go.
 4. Turn protection on from the control panel.
 
-Afterwards, open it from the Start menu. Closing the window does not stop protection.
+Afterwards, open it from the Start menu.
 
 ## Choosing apps
 
 - **Find common apps…** lists installed browsers, game stores, chat and music apps (Chrome, Steam, Discord, Spotify, …) so you can tick the ones to block.
 - **Add .exe…** picks any other program.
-
-Only those exact programs are closed, and only for your Windows account. Apps that install each update into a new folder, like Discord, are added with a `*` (for example `…\Discord\app-*\Discord.exe`) so updates don't undo the block.
 
 ## Schedule
 
@@ -24,15 +22,13 @@ Draw blocks on the 24-hour timeline: double-click to add, drag to move or resize
 
 ## Lock choices
 
-Setup asks whether you can later change the hours, turn protection off, remove apps, uninstall, and change these lock choices. Each is **Yes — anytime**, **No — never** or **Only during allowed hours** (while the apps aren't blocked). You can see them in **Settings**, and edit them there if you allowed it.
-
-Turning protection on and adding apps are always allowed.
+During setup, choose which settings you can change later. Review these choices carefully; some cannot be changed afterwards. You can review them in **Settings**.
 
 ## Updates keep your settings
 
-Your apps, schedule, lock choices and preferences are saved in `C:\ProgramData\WindowsAppBlocker\config.json`, separate from the program. To update, download the new exe, open it and select **Update installed app**. Uninstalling also keeps this file, so a reinstall picks up where you left off. To start completely fresh, delete that folder after uninstalling.
+To update, download the new exe, open it and select **Update installed app**. Your apps, schedule, lock choices and preferences are kept when you update or reinstall.
 
-> Apps are force-closed, so save your work before a block starts. This is a self-control aid, not security software: a Windows administrator can still get around it.
+> Apps are force-closed, so save your work before a block starts.
 
 ## Building from source
 

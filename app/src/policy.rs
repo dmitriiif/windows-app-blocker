@@ -1,6 +1,7 @@
 //! Setup-time choices that decide which controls stay available later.
 
 use crate::config::{Config, Policies, Policy};
+use crate::clock;
 use crate::schedule::is_blocked;
 use chrono::NaiveDateTime;
 
@@ -9,6 +10,15 @@ pub fn can_use(policy: Policy, config: &Config, now: NaiveDateTime) -> bool {
         Policy::Always => true,
         Policy::Never => false,
         Policy::AllowedHoursOnly => !is_blocked(config, now),
+    }
+}
+
+/// Uses the saved schedule zone. A missing zone must not unlock time-limited controls.
+pub fn can_use_now(policy: Policy, config: &Config) -> bool {
+    match policy {
+        Policy::Always => true,
+        Policy::Never => false,
+        Policy::AllowedHoursOnly => clock::now(config).is_ok_and(|now| can_use(policy, config, now)),
     }
 }
 

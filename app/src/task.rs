@@ -51,6 +51,9 @@ fn escape(text: &str) -> String {
 }
 
 fn task_xml(exe: &Path, target_user_sid: &str) -> String {
+    // An unbounded repeating trigger brings the monitor back after it is ended in Task Manager.
+    // The task is disabled when protection is off, so the trigger respects the on/off switch.
+    let start = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -60,6 +63,11 @@ fn task_xml(exe: &Path, target_user_sid: &str) -> String {
   <Triggers>
     <BootTrigger><Enabled>true</Enabled></BootTrigger>
     <LogonTrigger><Enabled>true</Enabled><UserId>{sid}</UserId></LogonTrigger>
+    <TimeTrigger>
+      <StartBoundary>{start}</StartBoundary>
+      <Enabled>true</Enabled>
+      <Repetition><Interval>PT1M</Interval></Repetition>
+    </TimeTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -97,6 +105,7 @@ fn task_xml(exe: &Path, target_user_sid: &str) -> String {
 "#,
         sid = escape(target_user_sid),
         exe = escape(&exe.to_string_lossy()),
+        start = start,
     )
 }
 
@@ -145,6 +154,11 @@ mod tests {
         let xml = task_xml(Path::new(r"C:\Program Files\Windows App Blocker\Windows App Blocker.exe"), "S-1-5-21-1-2-3-1001");
         assert_eq!(element(element(&xml, "Settings").unwrap(), "Enabled"), Some("false"));
         assert_eq!(element(&xml, "Arguments"), Some("--monitor"));
+        let trigger = element(&xml, "TimeTrigger").unwrap();
+        assert!(element(trigger, "StartBoundary").is_some());
+        assert_eq!(element(element(trigger, "Repetition").unwrap(), "Interval"), Some("PT1M"));
+        assert!(!trigger.contains("<Duration>"), "repeat until the task is disabled");
+        assert_eq!(element(element(&xml, "Settings").unwrap(), "MultipleInstancesPolicy"), Some("IgnoreNew"));
         assert!(xml.contains("<UserId>S-1-5-21-1-2-3-1001</UserId>"));
         assert!(TaskInfo { enabled: true, command: r"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe".into() }.is_legacy());
     }

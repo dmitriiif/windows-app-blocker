@@ -4,6 +4,7 @@
 //! would close (printed and logged), `--config <path>` reads another configuration file.
 
 use crate::config::{self, Config};
+use crate::clock;
 use crate::logger::Logger;
 use crate::notify;
 use crate::paths;
@@ -44,17 +45,24 @@ pub fn run(args: &[String]) -> i32 {
         }
         let interval = match &last_good {
             Some(config) => {
-                let now = chrono::Local::now().naive_local();
-                if is_blocked(config, now) {
-                    enforce(config, dry_run, &mut log);
-                } else if let Some((start, title, message)) = notify::due(config, now, notified_for) {
-                    notified_for = Some(start);
-                    if dry_run {
-                        log.info(&format!("Would notify: {title}"));
-                    } else if let Err(e) = notify::send_to_user(config, &title, &message) {
-                        log.error(&format!("Could not show the notification: {e}"));
-                    } else {
-                        log.info(&format!("Notified: {title}"));
+                match clock::now(config) {
+                    Ok(now) => {
+                        if is_blocked(config, now) {
+                            enforce(config, dry_run, &mut log);
+                        } else if let Some((start, title, message)) = notify::due(config, now, notified_for) {
+                            notified_for = Some(start);
+                            if dry_run {
+                                log.info(&format!("Would notify: {title}"));
+                            } else if let Err(e) = notify::send_to_user(config, &title, &message) {
+                                log.error(&format!("Could not show the notification: {e}"));
+                            } else {
+                                log.info(&format!("Notified: {title}"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log.error(&error);
+                        enforce(config, dry_run, &mut log);
                     }
                 }
                 config.check_interval_seconds.clamp(1, 60)

@@ -4,9 +4,10 @@ use super::theme;
 use super::timeline::{self, Schedule};
 use super::{App, ConfirmAction, JobDone, Modal};
 use crate::config::{self, Config};
+use crate::clock;
 use crate::install;
 use crate::paths::{self, APP_NAME};
-use crate::policy::{can_use, unavailable_message};
+use crate::policy::{can_use_now, unavailable_message};
 use crate::schedule::{is_blocked, next_change};
 use crate::task;
 use chrono::{Local, NaiveDateTime};
@@ -14,8 +15,10 @@ use egui::{vec2, Align, Color32, Frame, Layout, Margin, RichText, Rounding, Sens
 use std::path::Path;
 
 pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
-    let now = Local::now().naive_local();
     let Some(saved) = app.saved.clone() else { return };
+    let schedule_now = clock::now(&saved);
+    let clock_error = schedule_now.as_ref().err().cloned();
+    let now = schedule_now.unwrap_or_else(|_| Local::now().naive_local());
 
     egui::TopBottomPanel::top("control-header")
         .frame(Frame::none().fill(theme::bg()).inner_margin(Margin { left: 28.0, right: 28.0, top: 6.0, bottom: 8.0 }))
@@ -26,7 +29,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
                 ui.horizontal(|ui| {
                     super::header(ui, "Block selected Windows apps on your schedule");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        protection_pill(app, ui, &saved, now);
+                        protection_pill(app, ui, &saved, now, clock_error.as_deref());
                         ui.add_space(4.0);
                         if theme::quiet_button(ui, "⚙  Settings").clicked() {
                             app.settings_open = true;
@@ -48,7 +51,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
     egui::TopBottomPanel::bottom("control-footer")
         .frame(Frame::none().fill(theme::surface()).stroke(Stroke::new(1.0_f32, theme::border())).inner_margin(Margin::symmetric(28.0, 14.0)))
         .show(ctx, |ui| {
-            ui.add_enabled_ui(interactive, |ui| footer(app, ui, &saved, now));
+            ui.add_enabled_ui(interactive, |ui| footer(app, ui, &saved));
         });
 
     egui::CentralPanel::default().frame(Frame::none().fill(theme::bg()).inner_margin(Margin::symmetric(28.0, 12.0))).show(ctx, |ui| {
@@ -56,13 +59,13 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context, interactive: bool) {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 theme::card(ui, |ui| {
                     theme::section_title(ui, "Apps to block", Some("Only these exact programs are closed, and only for your Windows account."));
-                    let can_remove = can_use(saved.policies.remove_executables, &saved, now);
+                    let can_remove = can_use_now(saved.policies.remove_executables, &saved);
                     let reason = unavailable_message(saved.policies.remove_executables, "Apps cannot be removed");
                     apps_editor(ui, app, can_remove, &saved.executables, &reason);
                 });
                 ui.add_space(14.0);
                 theme::card(ui, |ui| {
-                    let editable = can_use(saved.policies.change_times, &saved, now);
+                    let editable = can_use_now(saved.policies.change_times, &saved);
                     ui.horizontal(|ui| {
                         theme::section_title(ui, "Blocking schedule", None);
                         if !editable {
@@ -118,7 +121,7 @@ fn describe_change(now: NaiveDateTime, at: NaiveDateTime, blocked: bool) -> Stri
 }
 
 /// Compact status pill with the protection on/off switch, shown in the header.
-fn protection_pill(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime) {
+fn protection_pill(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime, clock_error: Option<&str>) {
     let task_state = app.task.get();
     let blocked = is_blocked(saved, now);
     let count = saved.executables.len();
@@ -130,12 +133,13 @@ fn protection_pill(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTim
         Off,
         Attention(String),
     }
-    let state = match (&app.load_error, &task_state) {
-        (Some(error), _) => State::Attention(error.clone()),
-        (None, None) => State::Checking,
-        (None, Some(None)) => State::Missing,
-        (None, Some(Some(info))) if info.enabled => State::On,
-        (None, Some(Some(_))) => State::Off,
+    let state = match (&app.load_error, clock_error, &task_state) {
+        (Some(error), _, _) => State::Attention(error.clone()),
+        (None, Some(error), _) => State::Attention(error.to_owned()),
+        (None, None, None) => State::Checking,
+        (None, None, Some(None)) => State::Missing,
+        (None, None, Some(Some(info))) if info.enabled => State::On,
+        (None, None, Some(Some(_))) => State::Off,
     };
     let (color, title, detail) = match &state {
         State::Checking => (theme::muted_color(), "Checking…", "Reading the background task.".to_owned()),
@@ -169,7 +173,7 @@ fn protection_pill(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTim
             match state {
                 State::On | State::Off => {
                     let was_on = matches!(state, State::On);
-                    let allowed = !was_on || can_use(saved.policies.turn_off, saved, now);
+                    let allowed = !was_on || can_use_now(saved.policies.turn_off, saved);
                     let mut on = was_on;
                     let response = ui
                         .allocate_ui_with_layout(vec2(52.0, row_height), centered, |ui| {
@@ -321,8 +325,7 @@ fn add_executables(app: &mut App) {
 /// Saves the app list, and the schedule when changing hours is allowed right now.
 fn save_changes(app: &mut App, announce: bool) -> Result<(), String> {
     let saved = app.saved.clone().ok_or("The configuration is not loaded.")?;
-    let now = Local::now().naive_local();
-    let can_change_times = can_use(saved.policies.change_times, &saved, now);
+    let can_change_times = can_use_now(saved.policies.change_times, &saved);
     let mut next = saved.clone();
     next.executables = app.draft.executables.clone();
     if can_change_times {
@@ -348,10 +351,9 @@ fn toggle_protection(app: &mut App, currently_on: bool) {
         app.error("Could not change protection", message);
         return;
     }
-    let Some(saved) = app.saved.clone() else { return };
-    let now = Local::now().naive_local();
+    let Some(mut saved) = app.saved.clone() else { return };
     if currently_on {
-        if !can_use(saved.policies.turn_off, &saved, now) {
+        if !can_use_now(saved.policies.turn_off, &saved) {
             app.error("Could not change protection", unavailable_message(saved.policies.turn_off, "Turning protection off is unavailable"));
             return;
         }
@@ -363,6 +365,21 @@ fn toggle_protection(app: &mut App, currently_on: bool) {
         if saved.executables.is_empty() {
             app.error("Could not change protection", "Add at least one .exe before turning protection on.");
             return;
+        }
+        match clock::pin(&mut saved) {
+            Ok(true) => {
+                if let Err(message) = config::save(&saved, &paths::config_path()) {
+                    app.error("Could not turn protection on", message);
+                    return;
+                }
+                app.saved = Some(saved.clone());
+                app.draft = saved;
+            }
+            Ok(false) => {}
+            Err(message) => {
+                app.error("Could not turn protection on", message);
+                return;
+            }
         }
         app.start_job("Turning protection on…", || {
             if task::query().is_none() {
@@ -378,7 +395,7 @@ pub(super) fn uninstall(app: &mut App) {
     app.start_job("Uninstalling…", || install::uninstall().map(|_| JobDone::Uninstalled));
 }
 
-fn footer(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime) {
+fn footer(app: &mut App, ui: &mut Ui, saved: &Config) {
     let dirty = app.is_dirty();
     ui.horizontal(|ui| {
         let save = ui.add_enabled_ui(dirty, |ui| theme::filled_button(ui, "Save changes", vec2(150.0, 38.0))).inner;
@@ -399,7 +416,7 @@ fn footer(app: &mut App, ui: &mut Ui, saved: &Config, now: NaiveDateTime) {
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let can_uninstall = can_use(saved.policies.uninstall, saved, now);
+            let can_uninstall = can_use_now(saved.policies.uninstall, saved);
             let response = ui
                 .add_enabled(can_uninstall, egui::Button::new(RichText::new("Uninstall").color(theme::muted_color())).fill(Color32::TRANSPARENT).stroke(Stroke::new(1.0_f32, theme::border())))
                 .on_hover_text(format!("Remove {APP_NAME} from this computer. Your settings are kept for a reinstall."))

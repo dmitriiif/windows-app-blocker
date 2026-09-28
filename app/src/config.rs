@@ -270,6 +270,13 @@ pub struct Preferences {
     pub notify_minutes: u32,
 }
 
+/// The Windows time zone in effect when protection was first enabled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleTimeZone {
+    pub id: String,
+    pub daylight_time_disabled: bool,
+}
+
 impl Default for Preferences {
     fn default() -> Preferences {
         Preferences { theme: Theme::default(), notify_before_block: false, notify_minutes: 10 }
@@ -287,6 +294,8 @@ pub struct Config {
     pub target_user_sid: String,
     pub check_interval_seconds: u32,
     #[serde(default)]
+    pub schedule_time_zone: Option<ScheduleTimeZone>,
+    #[serde(default)]
     pub shortcuts: Shortcuts,
     #[serde(default)]
     pub preferences: Preferences,
@@ -303,6 +312,7 @@ impl Default for Config {
             executables: Vec::new(),
             target_user_sid: String::new(),
             check_interval_seconds: 2,
+            schedule_time_zone: None,
             shortcuts: Shortcuts::default(),
             preferences: Preferences::default(),
         }
@@ -339,6 +349,9 @@ impl Config {
         }
         if !is_valid_sid(&self.target_user_sid) {
             return Err("target_user_sid is not a valid Windows security identifier.".into());
+        }
+        if self.schedule_time_zone.as_ref().is_some_and(|zone| zone.id.trim().is_empty() || zone.id.encode_utf16().count() >= 128) {
+            return Err("schedule_time_zone is not valid.".into());
         }
         for executable in &self.executables {
             validate_executable(executable)?;
@@ -505,6 +518,7 @@ fn migrate_v2(v: &Value) -> Result<Config, String> {
         executables,
         target_user_sid: text("TargetUserSid").unwrap_or_default(),
         check_interval_seconds: v.get("CheckIntervalSeconds").and_then(Value::as_u64).unwrap_or(2) as u32,
+        schedule_time_zone: None,
         shortcuts: Shortcuts::default(),
         preferences: Preferences::default(),
     })
@@ -606,6 +620,17 @@ mod tests {
         let mut value = serde_json::to_value(&c).unwrap();
         value["policies"].as_object_mut().unwrap().remove("change_locks");
         assert_eq!(from_json_str(&value.to_string()).unwrap().policies.change_locks, Policy::Never, "older v3 file");
+    }
+
+    #[test]
+    fn saved_time_zone_survives_restart_and_old_configs_still_load() {
+        let mut c = Config { target_user_sid: SID.into(), ..Config::default() };
+        let mut old = serde_json::to_value(&c).unwrap();
+        old.as_object_mut().unwrap().remove("schedule_time_zone");
+        assert_eq!(from_json_str(&old.to_string()).unwrap().schedule_time_zone, None);
+
+        c.schedule_time_zone = Some(ScheduleTimeZone { id: "Pacific Standard Time".into(), daylight_time_disabled: false });
+        assert_eq!(from_json_str(&serde_json::to_string(&c).unwrap()).unwrap().schedule_time_zone, c.schedule_time_zone);
     }
 
     #[test]

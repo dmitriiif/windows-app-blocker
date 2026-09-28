@@ -5,10 +5,10 @@ use super::theme;
 use super::timeline::{self, Schedule};
 use super::{App, ConfirmAction, JobDone, Modal};
 use crate::config::{is_valid_sid, Policy, ScheduleMode};
+use crate::clock;
 use crate::install;
-use crate::policy::{self, can_use, choice_label, display, unavailable_message};
+use crate::policy::{self, can_use_now, choice_label, display, unavailable_message};
 use crate::win;
-use chrono::Local;
 use egui::{vec2, Align, Color32, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, Ui};
 
 const STEPS: [&str; 4] = ["Lock choices", "Apps", "Schedule", "Finish"];
@@ -95,7 +95,7 @@ fn stepper(ui: &mut Ui, current: usize) {
 /// Whether the schedule may be edited during this setup.
 fn schedule_editable(app: &App) -> bool {
     match &app.setup.previous {
-        Some(previous) if app.setup.locked_policies => can_use(previous.policies.change_times, previous, Local::now().naive_local()),
+        Some(previous) if app.setup.locked_policies => can_use_now(previous.policies.change_times, previous),
         _ => true,
     }
 }
@@ -139,9 +139,10 @@ fn schedule_step(app: &mut App, ui: &mut Ui) {
                 Policy::Never => note(ui, theme::amber(), "You chose never to change blocking hours after setup, so this step cannot be skipped. Set your hours carefully now."),
             }
         }
+        let now = clock::display_now(&app.draft);
         let draft = &mut app.draft;
         let schedule = Schedule { mode: &mut draft.schedule_mode, days: &mut draft.days };
-        timeline::show(ui, &mut app.timeline, schedule, editable, Local::now().naive_local());
+        timeline::show(ui, &mut app.timeline, schedule, editable, now);
     });
 }
 
@@ -178,10 +179,9 @@ fn policies_step(app: &mut App, ui: &mut Ui) {
 }
 
 fn apps_step(app: &mut App, ui: &mut Ui) {
-    let now = Local::now().naive_local();
     let (can_remove, protected, reason) = match (&app.setup.previous, app.setup.locked_policies) {
         (Some(previous), true) => (
-            can_use(previous.policies.remove_executables, previous, now),
+            can_use_now(previous.policies.remove_executables, previous),
             previous.executables.clone(),
             unavailable_message(previous.policies.remove_executables, "Apps from your previous installation cannot be removed"),
         ),

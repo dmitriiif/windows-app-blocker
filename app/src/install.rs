@@ -5,6 +5,7 @@
 //! the same apps, schedule and lock choices.
 
 use crate::config::{self, Config};
+use crate::clock;
 use crate::paths::{self, APP_NAME};
 use crate::task;
 use crate::win;
@@ -84,6 +85,11 @@ pub fn save_setup_progress(config: &Config) -> Result<(), String> {
 /// Installs or upgrades the app with `config`, which must already have its setup choices.
 pub fn install(config: &Config) -> Result<(), String> {
     let restore_protection = task::query().is_some_and(|t| t.enabled && !t.is_legacy());
+    let mut config = config.clone();
+    config.setup_completed = true;
+    if restore_protection {
+        clock::pin(&mut config)?;
+    }
     if task::query().is_some() {
         task::stop();
     }
@@ -100,8 +106,6 @@ pub fn install(config: &Config) -> Result<(), String> {
         copy_with_retry(&current, &installed)?;
     }
 
-    let mut config = config.clone();
-    config.setup_completed = true;
     config::save(&config, &paths::config_path())?;
     secure_directory(&data_dir)?;
 

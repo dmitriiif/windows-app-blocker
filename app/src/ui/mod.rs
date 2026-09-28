@@ -174,8 +174,7 @@ impl App {
             Some(config) if config.setup_completed && install::is_installed() => app.open_control(config),
             Some(config) => {
                 let completed = config.setup_completed;
-                let now = chrono::Local::now().naive_local();
-                app.setup.locked_policies = completed && !crate::policy::can_use(config.policies.change_locks, &config, now);
+                app.setup.locked_policies = completed && !crate::policy::can_use_now(config.policies.change_locks, &config);
                 app.setup.previous = completed.then(|| config.clone());
                 app.setup.notice = Some(if legacy_task {
                     "Upgrading from the previous version. Your apps, schedule and lock choices have been carried over.".into()
@@ -294,6 +293,7 @@ impl App {
             Ok(JobDone::Protection(info)) => self.task.set(info),
             Ok(JobDone::Updated) => {
                 self.task.set(task::query());
+                self.reload_saved();
                 self.update_available = false;
                 self.toast("The installed app has been updated.");
             }
